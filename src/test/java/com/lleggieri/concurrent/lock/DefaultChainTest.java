@@ -37,7 +37,7 @@ public class DefaultChainTest {
 
   @Test
   public void testEnqueuing() throws ExecutionException, InterruptedException {
-    final Chain<Integer> defaultChain = Chain.create();
+    final Chain<Integer> defaultChain = ChainFactory.create();
 
     final CompletableCompletionStage<String> CompletionStage1 = factory.createCompletionStage();
     Supplier<CompletionStage<String>> supplier1 = () -> CompletionStage1;
@@ -101,7 +101,7 @@ public class DefaultChainTest {
     final ExecutorService executorService = java.util.concurrent.Executors.newCachedThreadPool();
     final ConcurrentMap<String, Boolean> workingOn = new ConcurrentHashMap<>();
     final List<CompletableFuture<Boolean>> Futures = new ArrayList<>();
-    final Chain<String> chain = Chain.create();
+    final Chain<String> chain = ChainFactory.create();
     try {
       for (int i = 0; i < 30; i++) {
         final String key = Integer.toString(i % 3);

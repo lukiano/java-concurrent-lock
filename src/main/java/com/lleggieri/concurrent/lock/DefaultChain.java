@@ -2,6 +2,7 @@ package com.lleggieri.concurrent.lock;
 
 import javax.annotation.Nonnull;
 import javax.annotation.concurrent.ThreadSafe;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,7 +14,7 @@ import java.util.function.Supplier;
  *
  * @param <K> Key type.
  */
-@ThreadSafe final class DefaultChain<K> extends Chain<K> {
+@ThreadSafe final class DefaultChain<K> implements Chain<K> {
 
   DefaultChain(@Nonnull final ConcurrentMap<K, Entry<?>> map) {
     this.map = map;
@@ -34,14 +35,14 @@ import java.util.function.Supplier;
                                             @Nonnull final Type type,
                                             @Nonnull final Supplier<CompletionStage<A>> block) {
     // Remove from the map after the promise completes if it is the last one.
-    final Entry<A> entry = new EntryImpl<>(key, type, map);
+    final Entry<A> entry = new Entry<>(type);
+    entry.promise().whenComplete((a, t) -> map.remove(key, entry));
     // Atomically set this callback as the latest one on the queue.
     final Entry<?> previousEntry = map.put(key, entry);
     if (previousEntry == null) {
       // No one is running anything on this key. Run this block and then update the handler with the result.
       block.get().whenComplete(entry.callback());
     } else if (previousEntry.type() == Type.SHARED && entry.type() == Type.SHARED) {
-      final Callback<A> callback = new Callback<>();
       final BiConsumer<Object, Throwable> barrier = new BiConsumer<Object, Throwable>() {
         private final AtomicInteger counter = new AtomicInteger(0);
         @Override public void accept(final Object ignored1, final Throwable ignored2) {
@@ -50,41 +51,45 @@ import java.util.function.Supplier;
           }
         }
       };
-      callback.whenComplete(barrier);
-      previousEntry.future().whenComplete(barrier);
-      block.get().whenComplete(callback);
+      previousEntry.promise().whenComplete(barrier);
+      block.get().whenComplete(barrier);
     } else {
       // Enqueue this block to be run after the current block is done.
       // Run it on the same thread and then update the handler with the result.
-      previousEntry.future().whenComplete((a, t) -> block.get().whenComplete(entry.callback()));
+      previousEntry.promise().whenComplete((ignored, t) -> block.get().whenComplete(entry.callback()));
     }
 
-    // Return a promise that will be completed with the listenableFuture.
-    return entry.future();
+    // Return a promise that will be completed with the callback.
+    return entry.promise();
   }
 
-  private static final class EntryImpl<K, A> implements Entry<A> {
+  private static final class Entry<A> {
     private final Type type;
-    private final Callback<A> lfc;
+    private final CompletableFuture<A> cf;
+    private final BiConsumer<A, Throwable> callback;
 
-    public EntryImpl(final K key, final Type type, final ConcurrentMap<K, Entry<?>> map) {
+    public Entry(final Type type) {
       this.type = type;
-      this.lfc = new Callback<>();
-      this.lfc.whenComplete((a, t) -> map.remove(key, EntryImpl.this));
+      this.cf = new CompletableFuture<>();
+      this.callback = (a, t) -> {
+        if (t == null) {
+          this.cf.complete(a);
+        } else {
+          this.cf.completeExceptionally(t);
+        }
+      };
     }
 
-    @Override public Type type() {
+    public Type type() {
       return type;
     }
-    @Override public BiConsumer<A, Throwable> callback() {
-      return lfc;
+    public BiConsumer<A, Throwable> callback() {
+      return callback;
     }
 
-    @Override public CompletionStage<A> future() {
-      return lfc;
+    public CompletionStage<A> promise() {
+      return cf;
     }
-
   }
-
 }
 
